@@ -1,0 +1,92 @@
+:local routerName [/system identity get name]
+:local deviceSerial [/system routerboard get serial-number]
+:local deviceModel [/system routerboard get model]
+:local deviceArchitecture [/system resource get architecture-name]
+:local currentDate [/system clock get date]
+:local newVersion [$extractVersionFromFile "script.rsc"]
+:local currentVersion [/file get [/file find name="script_version.txt"] contents]
+:local shouldUpdate false
+:local emailSubject ""
+:local emailBody ""
+/tool fetch url="http://adres_serwera/skrypt.rsc" mode=http
+:local extractVersionFromFile do={
+    :local filePath $1
+    :local fileContent [/file get [/file find name=$filePath] contents]
+    :local firstLine ""
+    :local versionNum "0.0"
+    
+    :if ([:len $fileContent] > 0) do={
+        :local newlinePos [:find $fileContent "\n"]
+        :if ($newlinePos > 0) do={
+            :set firstLine [:pick $fileContent 0 $newlinePos]
+        } else={
+            :set firstLine $fileContent
+        }
+        
+        :local versionPos [:find $firstLine "v"]
+        :if ($versionPos > 0) do={
+            :set versionNum [:pick $firstLine ($versionPos + 1) [:len $firstLine]]
+        }
+    }
+    :return $versionNum
+}
+
+:if ([:len [/file find name="script_version.txt"]] = 0) do={
+    /file print file=script_version.txt
+    /file set script_version.txt contents="0.0"
+}
+
+
+
+
+
+
+:if ($newVersion != $currentVersion) do={
+    :local currentMajor 0
+    :local currentMinor 0
+    :local newMajor 0
+    :local newMinor 0
+    
+    :local dotPosC [:find $currentVersion "."]
+    :if ($dotPosC > 0) do={
+        :set currentMajor [:tonum [:pick $currentVersion 0 $dotPosC]]
+        :set currentMinor [:tonum [:pick $currentVersion ($dotPosC + 1) [:len $currentVersion]]]
+    }
+    
+    :local dotPosN [:find $newVersion "."]
+    :if ($dotPosN > 0) do={
+        :set newMajor [:tonum [:pick $newVersion 0 $dotPosN]]
+        :set newMinor [:tonum [:pick $newVersion ($dotPosN + 1) [:len $newVersion]]]
+    }
+    
+    :if ($newMajor > $currentMajor) do={
+        :set shouldUpdate true
+    } else={
+        :if (($newMajor = $currentMajor) && ($newMinor > $currentMinor)) do={
+            :set shouldUpdate true
+        }
+    }
+}
+
+
+
+:if ($shouldUpdate) do={
+     /system scheduler remove monitorowanie_log
+    /system scheduler remove aktualizacje-scheduler
+    /system scheduler remove kopie-scheduler
+    :delay 5s
+    /system script remove monitorowanie_logowania
+    /system script remove kopia_zapasowa+mail
+    /system script remove aktualizacje
+    :delay 5s
+    :set emailSubject ("MTK Skrypty - aktualizacja wymagana -> " . $routerName)
+    :set emailBody "Status aktualizacji dla urządzenia: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nWykryto nową wersję skryptu: $newVersion (aktualna wersja: $currentVersion)\r\nAktualizacja zostanie wykonana."
+    :delay 15s
+    /import script.rsc
+    
+    /file set script_version.txt contents=$newVersion
+} else={
+    :set emailSubject ("MTK Skrypty - status aktualizacji -> " . $routerName)
+    :set emailBody "Status aktualizacji dla urządzenia: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nSkrypty są aktualne"
+    /tool e-mail send to="praktyka@zeim.pl" subject=$emailSubject body=$emailBody
+}
