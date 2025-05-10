@@ -1,4 +1,4 @@
-#Skrypt Mikrotik v0.4
+#Skrypt Mikrotik v1.0
     /system scheduler
     add interval=1w name=skrypty-scheduler on-event=skrypty_update policy=\
         ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon \
