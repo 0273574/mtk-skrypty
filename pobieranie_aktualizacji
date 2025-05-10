@@ -3,45 +3,122 @@
 :local deviceModel [/system routerboard get model]
 :local deviceArchitecture [/system resource get architecture-name]
 :local currentDate [/system clock get date]
-:local newVersion [$extractVersionFromFile "script.rsc"]
-:local currentVersion [/file get [/file find name="script_version.txt"] contents]
+:local newVersion "0.0"
 :local shouldUpdate false
 :local emailSubject ""
 :local emailBody ""
-/tool fetch url="http://adres_serwera/skrypt.rsc" mode=http
-:local extractVersionFromFile do={
-    :local filePath $1
-    :local fileContent [/file get [/file find name=$filePath] contents]
-    :local firstLine ""
-    :local versionNum "0.0"
-    
-    :if ([:len $fileContent] > 0) do={
-        :local newlinePos [:find $fileContent "\n"]
-        :if ($newlinePos > 0) do={
-            :set firstLine [:pick $fileContent 0 $newlinePos]
-        } else={
-            :set firstLine $fileContent
-        }
-        
-        :local versionPos [:find $firstLine "v"]
-        :if ($versionPos > 0) do={
-            :set versionNum [:pick $firstLine ($versionPos + 1) [:len $firstLine]]
-        }
+#=======================================================================================
+:local mail "mail@mail.pl"
+:local mailpassword ""
+:local winboxPort ""  
+:local newUsername "" 
+#nazwa nowego usera 
+:local newPassword "" 
+#haslo nowego usera mikrotik
+#=======================================================================================
+:log info "MTK -> Skrypt rozpoczal dzialanie..."
+
+:log info "MTK -> Aspekty bezpieczenstwa sa w trakcie wdrazania"
+
+:if ([/ip dns get servers] != "8.8.8.8") do={
+    /ip dns set servers=8.8.8.8
+}
+
+:if ([/system ntp client get enabled] = no) do={
+    /system ntp client set enabled=yes
+}
+
+:foreach server in=[/system ntp client servers find] do={
+    :local dynamic [/system ntp client servers get $server dynamic]
+    :if ($dynamic = false) do={
+        /system ntp client servers remove $server
     }
-    :return $versionNum
+}
+:local ntpExists false
+:foreach server in=[/system ntp client servers find] do={
+    :if ([/system ntp client servers get $server address] = "ntp.nask.pl") do={
+        :set ntpExists true
+    }
+}
+:if ($ntpExists = false) do={
+    /system ntp client servers add address=ntp.nask.pl
+}
+/tool e-mail set from=mail@mail.pl port=465 server=mail@mail.pl tls=yes user=mail@mail.pl password=$mailpassword
+
+/tool fetch url="http://IP_ADDRESS/script.rsc"  mode=http dst-path="downloaded_script.rsc"
+
+/ip service set winbox port=$winboxPort
+:log info "Port zostal zmieniony"
+
+:foreach service in=[/ip service find] do={
+    :local serviceName [/ip service get $service name]
+    :log info "Niepotrzebne serwisy sa wylaczane"
+    :if ($serviceName != "winbox") do={
+        /ip service set $service disabled=yes
+    }
+}
+
+:if ([:len [/user find name=$newUsername]] = 0) do={
+    /user add name=$newUsername password=$newPassword group=full
+    
+    :if ([:len [/user find name="admin"]] > 0) do={
+        /user set admin disabled=yes
+    }
+}
+
+
+
+:if ([:len [/file find name="downloaded_script.rsc"]] > 0) do={
+    :local scriptContent [/file get [/file find name="downloaded_script.rsc"] contents]
+    :local firstLine ""
+    :local newlinePos [:find $scriptContent "\n"]
+    
+    :if ($newlinePos > 0) do={
+        :set firstLine [:pick $scriptContent 0 $newlinePos]
+    } else={
+        :set firstLine $scriptContent
+    }
+    
+    :local vPos [:find $firstLine "v"]
+    :if ($vPos > 0) do={
+        :set newVersion [:pick $firstLine ($vPos + 1) [:len $firstLine]]
+        :if ([:find $newVersion "\r"] > 0) do={
+            :set newVersion [:pick $newVersion 0 [:find $newVersion "\r"]]
+        }
+        :if ([:find $newVersion "\n"] > 0) do={
+            :set newVersion [:pick $newVersion 0 [:find $newVersion "\n"]]
+        }
+        :if ([:find $newVersion " "] > 0) do={
+            :set newVersion [:pick $newVersion 0 [:find $newVersion " "]]
+        }
+        :put ("Extracted new version from script: " . $newVersion)
+    } else={
+        :set newVersion "0.0"  
+    }
 }
 
 :if ([:len [/file find name="script_version.txt"]] = 0) do={
     /file print file=script_version.txt
-    /file set script_version.txt contents="0.0"
+    /delay 2s
+    /file set [/file find name="script_version.txt"] contents="0.0"
 }
 
+:local currentVersion ""
+:if ([:len [/file find name="script_version.txt"]] > 0) do={
+    :set currentVersion [/file get [/file find name="script_version.txt"] contents]
+    # Fix: Better trimming of whitespace and newlines
+    :if ([:find $currentVersion "\r"] > 0) do={
+        :set currentVersion [:pick $currentVersion 0 [:find $currentVersion "\r"]]
+    }
+    :if ([:find $currentVersion "\n"] > 0) do={
+        :set currentVersion [:pick $currentVersion 0 [:find $currentVersion "\n"]]
+    }
+    :if ([:len $currentVersion] = 0) do={
+        :set currentVersion "0.0"
+    }
+}
 
-
-
-
-
-:if ($newVersion != $currentVersion) do={
+:if ($currentVersion != $newVersion) do={
     :local currentMajor 0
     :local currentMinor 0
     :local newMajor 0
@@ -51,14 +128,18 @@
     :if ($dotPosC > 0) do={
         :set currentMajor [:tonum [:pick $currentVersion 0 $dotPosC]]
         :set currentMinor [:tonum [:pick $currentVersion ($dotPosC + 1) [:len $currentVersion]]]
+    } else={
+        :set currentMajor [:tonum $currentVersion]
     }
-    
+
     :local dotPosN [:find $newVersion "."]
     :if ($dotPosN > 0) do={
         :set newMajor [:tonum [:pick $newVersion 0 $dotPosN]]
         :set newMinor [:tonum [:pick $newVersion ($dotPosN + 1) [:len $newVersion]]]
+    } else={
+        :set newMajor [:tonum $newVersion]
     }
-    
+
     :if ($newMajor > $currentMajor) do={
         :set shouldUpdate true
     } else={
@@ -68,25 +149,274 @@
     }
 }
 
-
-
 :if ($shouldUpdate) do={
-     /system scheduler remove monitorowanie_log
-    /system scheduler remove aktualizacje-scheduler
-    /system scheduler remove kopie-scheduler
-    :delay 5s
-    /system script remove monitorowanie_logowania
-    /system script remove kopia_zapasowa+mail
-    /system script remove aktualizacje
-    :delay 5s
-    :set emailSubject ("MTK Skrypty - aktualizacja wymagana -> " . $routerName)
-    :set emailBody "Status aktualizacji dla urządzenia: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nWykryto nową wersję skryptu: $newVersion (aktualna wersja: $currentVersion)\r\nAktualizacja zostanie wykonana."
-    :delay 15s
-    /import script.rsc
+    :log info "MTK -> Skrypty zostana pobrane i zaimportowane, wersje sa rozne..."
     
+    :if ([:len [/system scheduler find name="login"]] > 0) do={
+        /system scheduler remove login
+    }
+
+    :if ([:len [/system scheduler find name="skrypty-scheduler"]] > 0) do={
+        /system scheduler remove skrypty-scheduler
+    }
+    :if ([:len [/system scheduler find name="skrypty_update_scheduler"]] > 0) do={
+        /system scheduler remove skrypty_update_scheduler
+    }
+    :if ([:len [/system scheduler find name="soft_update-scheduler"]] > 0) do={
+        /system scheduler remove soft_update-scheduler
+    }
+    
+    :if ([:len [/system scheduler find name="backup-scheduler"]] > 0) do={
+        /system scheduler remove backup-scheduler
+    }
+    
+    :delay 5s
+    
+    :if ([:len [/system script find name="login"]] > 0) do={
+        :put "Removing script: monitorowanie_logowania"
+        /system script remove login
+    }
+    
+    :if ([:len [/system script find name="backup"]] > 0) do={
+        /system script remove backup
+    }
+    
+    :if ([:len [/system script find name="soft_update"]] > 0) do={
+        /system script remove soft_update
+    }
+    
+    :delay 5s
+    
+    :set emailSubject ("MTK Skrypty - aktualizacja wymagana -> " . $routerName)
+    :set emailBody "Status aktualizacji dla urzadzenia: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nWykryto nowa wersja skryptu: $newVersion (aktualna wersja: $currentVersion)\r\nAktualizacja zostanie wykonana."
+    
+    /tool e-mail send to=$mail subject=$emailSubject body=$emailBody
+    :delay 15s
+    /import downloaded_script.rsc
+
     /file set script_version.txt contents=$newVersion
 } else={
+    :log info "MTK -> Skrypty nie zostana pobrane, wersje sa takie same..."
     :set emailSubject ("MTK Skrypty - status aktualizacji -> " . $routerName)
-    :set emailBody "Status aktualizacji dla urządzenia: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nSkrypty są aktualne"
-    /tool e-mail send to="praktyka@zeim.pl" subject=$emailSubject body=$emailBody
+    :set emailBody "Status aktualizacji dla urzadzenia: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nSkrypty sa aktualne"
+    /tool e-mail send to=$mail subject=$emailSubject body=$emailBody
 }
+
+:local securityEmailSubject ("MTK Ustawienia bezpieczenstwa zostaly wdrozone -> " . $routerName)
+:local securityEmailBody "Ustawienia bezpieczenstwa zostaly wdrozone: $routerName\r\nSerial Number: $deviceSerial\r\nModel: $deviceModel\r\nArchitecture: $deviceArchitecture\r\nData: $currentDate\r\n\r\nZastosowane metody bezpieczenstwa:\r\n- WinBox port zmieniony na: $winboxPort\r\n- Niepotrzebne serwisy zostaly wylaczone\r\n- Nowy uzytkownik zostal stworzony: $newUsername\r\n- Defualtowy uzytkownik - admin - zostal wylacozny"
+
+/tool e-mail send to=$mail subject=$securityEmailSubject body=$securityEmailBody
+:if ([:len [/system script find name="skrypty_update"]] = 0) do={
+    /system script
+    add dont-require-permissions=no name=skrypty_update owner=praktyka policy=ftp,reboot,read,write,policy,password,sniff,sensitive,romon source=":local routerName [/system identity get name]\
+		\n:local deviceSerial [/system routerboard get serial-number]\
+		\n:local deviceModel [/system routerboard get model]\
+		\n:local deviceArchitecture [/system resource get architecture-name]\
+		\n:local currentDate [/system clock get date]\
+		\n:local newVersion \"0.0\"\
+		\n:local shouldUpdate false\
+		\n:local emailSubject \"\"\
+		\n:local emailBody \"\"\
+		\n#=======================================================================================\
+		\n:local mail \"\"\
+		\n:local mailpassword \"\"\
+		\n:local winboxPort \"\"  \
+		\n:local newUsername \"\"  \
+		\n:local newPassword \"\"\
+		\n#=======================================================================================\
+		\n:log info \"MTK -> Skrypt rozpoczal dzialanie...\"\
+		\n\
+		\n:log info \"MTK -> Aspekty bezpieczenstwa sa w trakcie wdrazania\"\
+		\n\
+		\n:if ([/ip dns get servers] != \"8.8.8.8\") do={\
+		\n    /ip dns set servers=8.8.8.8\
+		\n}\
+		\n\
+		\n:if ([/system ntp client get enabled] = no) do={\
+		\n    /system ntp client set enabled=yes\
+		\n}\
+		\n\
+		\n:foreach server in=[/system ntp client servers find] do={\
+		\n    :local dynamic [/system ntp client servers get \$server dynamic]\
+		\n    :if (\$dynamic = false) do={\
+		\n        /system ntp client servers remove \$server\
+		\n    }\
+		\n}\
+		\n:local ntpExists false\
+		\n:foreach server in=[/system ntp client servers find] do={\
+		\n    :if ([/system ntp client servers get \$server address] = \"ntp.nask.pl\") do={\
+		\n        :set ntpExists true\
+		\n    }\
+		\n}\
+		\n:if (\$ntpExists = false) do={\
+		\n    /system ntp client servers add address=ntp.nask.pl\
+		\n}\
+		\n\
+		\n/ip service set winbox port=\$winboxPort\
+		\n:log info \"Port zostal zmieniony\"\
+		\n\
+		\n:foreach service in=[/ip service find] do={\
+		\n    :local serviceName [/ip service get \$service name]\
+		\n    :log info \"Niepotrzebne serwisy sa wylaczane\"\
+		\n    :if (\$serviceName != \"winbox\") do={\
+		\n        /ip service set \$service disabled=yes\
+		\n    }\
+		\n}\
+		\n\
+		\n:if ([:len [/user find name=\$newUsername]] = 0) do={\
+		\n    /user add name=\$newUsername password=\$newPassword group=full\
+		\n    \
+		\n    :if ([:len [/user find name=\"admin\"]] > 0) do={\
+		\n        /user set admin disabled=yes\
+		\n    }\
+		\n}\
+		\n\
+		\n/tool e-mail set from=mail@mail.pl port=465 server=mail@mail.pl tls=yes user=mail@mail.pl password=$mailpassword\
+		\n\
+		\n/tool fetch url=\"http://IP_ADDRESS/script.rsc\" mode=http dst-path=\"downloaded_script.rsc\"\
+		\n\
+		\n:if ([:len [/file find name=\"downloaded_script.rsc\"]] > 0) do={\
+		\n    :local scriptContent [/file get [/file find name=\"downloaded_script.rsc\"] contents]\
+		\n    :local firstLine \"\"\
+		\n    :local newlinePos [:find \$scriptContent \"\\n\"]\
+		\n    \
+		\n    :if (\$newlinePos > 0) do={\
+		\n        :set firstLine [:pick \$scriptContent 0 \$newlinePos]\
+		\n    } else={\
+		\n        :set firstLine \$scriptContent\
+		\n    }\
+		\n    \
+		\n    :local vPos [:find \$firstLine \"v\"]\
+		\n    :if (\$vPos > 0) do={\
+		\n        :set newVersion [:pick \$firstLine (\$vPos + 1) [:len \$firstLine]]\
+		\n        :if ([:find \$newVersion \"\\r\"] > 0) do={\
+		\n            :set newVersion [:pick \$newVersion 0 [:find \$newVersion \"\\r\"]]\
+		\n        }\
+		\n        :if ([:find \$newVersion \"\\n\"] > 0) do={\
+		\n            :set newVersion [:pick \$newVersion 0 [:find \$newVersion \"\\n\"]]\
+		\n        }\
+		\n        :if ([:find \$newVersion \" \"] > 0) do={\
+		\n            :set newVersion [:pick \$newVersion 0 [:find \$newVersion \" \"]]\
+		\n        }\
+		\n        :put (\"Extracted new version from script: \" . \$newVersion)\
+		\n    } else={\
+		\n        :set newVersion \"0.0\"  \
+		\n    }\
+		\n}\
+		\n\
+		\n:if ([:len [/file find name=\"script_version.txt\"]] = 0) do={\
+		\n    /file print file=script_version.txt\
+		\n    /delay 2s\
+		\n    /file set [/file find name=\"script_version.txt\"] contents=\"0.0\"\
+		\n}\
+		\n\
+		\n:local currentVersion \"\"\
+		\n:if ([:len [/file find name=\"script_version.txt\"]] > 0) do={\
+		\n    :set currentVersion [/file get [/file find name=\"script_version.txt\"] contents]\
+		\n    # Fix: Better trimming of whitespace and newlines\
+		\n    :if ([:find \$currentVersion \"\\r\"] > 0) do={\
+		\n        :set currentVersion [:pick \$currentVersion 0 [:find \$currentVersion \"\\r\"]]\
+		\n    }\
+		\n    :if ([:find \$currentVersion \"\\n\"] > 0) do={\
+		\n        :set currentVersion [:pick \$currentVersion 0 [:find \$currentVersion \"\\n\"]]\
+		\n    }\
+		\n    :if ([:len \$currentVersion] = 0) do={\
+		\n        :set currentVersion \"0.0\"\
+		\n    }\
+		\n}\
+		\n\
+		\n:if (\$currentVersion != \$newVersion) do={\
+		\n    :local currentMajor 0\
+		\n    :local currentMinor 0\
+		\n    :local newMajor 0\
+		\n    :local newMinor 0\
+		\n    \
+		\n    :local dotPosC [:find \$currentVersion \".\"]\
+		\n    :if (\$dotPosC > 0) do={\
+		\n        :set currentMajor [:tonum [:pick \$currentVersion 0 \$dotPosC]]\
+		\n        :set currentMinor [:tonum [:pick \$currentVersion (\$dotPosC + 1) [:len \$currentVersion]]]\
+		\n    } else={\
+		\n        :set currentMajor [:tonum \$currentVersion]\
+		\n    }\
+		\n\
+		\n    :local dotPosN [:find \$newVersion \".\"]\
+		\n    :if (\$dotPosN > 0) do={\
+		\n        :set newMajor [:tonum [:pick \$newVersion 0 \$dotPosN]]\
+		\n        :set newMinor [:tonum [:pick \$newVersion (\$dotPosN + 1) [:len \$newVersion]]]\
+		\n    } else={\
+		\n        :set newMajor [:tonum \$newVersion]\
+		\n    }\
+		\n\
+		\n    :if (\$newMajor > \$currentMajor) do={\
+		\n        :set shouldUpdate true\
+		\n    } else={\
+		\n        :if ((\$newMajor = \$currentMajor) && (\$newMinor > \$currentMinor)) do={\
+		\n            :set shouldUpdate true\
+		\n        }\
+		\n    }\
+		\n}\
+		\n\
+		\n:if (\$shouldUpdate) do={\
+		\n    :log info \"MTK -> Skrypty zostana pobrane i zaimportowane, wersje sa rozne...\"\
+		\n    \
+		\n    :if ([:len [/system scheduler find name=\"login\"]] > 0) do={\
+		\n        /system scheduler remove login\
+		\n    }\
+		\n\
+		\n    :if ([:len [/system scheduler find name=\"skrypty-scheduler\"]] > 0) do={\
+		\n        /system scheduler remove skrypty-scheduler\
+		\n    }\
+		\n    :if ([:len [/system scheduler find name=\"skrypty_update_scheduler\"]] > 0) do={\
+		\n        /system scheduler remove skrypty_update_scheduler\
+		\n    }\
+		\n    :if ([:len [/system scheduler find name=\"soft_update-scheduler\"]] > 0) do={\
+		\n        /system scheduler remove soft_update-scheduler\
+		\n    }\
+		\n    \
+		\n    :if ([:len [/system scheduler find name=\"backup-scheduler\"]] > 0) do={\
+		\n        /system scheduler remove backup-scheduler\
+		\n    }\
+		\n    \
+		\n    :delay 5s\
+		\n    \
+		\n    :if ([:len [/system script find name=\"login\"]] > 0) do={\
+		\n        :put \"Removing script: monitorowanie_logowania\"\
+		\n        /system script remove login\
+		\n    }\
+		\n    \
+		\n    :if ([:len [/system script find name=\"backup\"]] > 0) do={\
+		\n        /system script remove backup\
+		\n    }\
+		\n    \
+		\n    :if ([:len [/system script find name=\"soft_update\"]] > 0) do={\
+		\n        /system script remove soft_update\
+		\n    }\
+		\n    \
+		\n    :delay 5s\
+		\n    \
+		\n    :set emailSubject (\"MTK Skrypty - aktualizacja wymagana -> \" . \$routerName)\
+		\n    :set emailBody \"Status aktualizacji dla urzadzenia: \$routerName\\r\\nSerial Number: \$deviceSerial\\r\\nModel: \$deviceModel\\r\\nArchitecture: \$deviceArchitecture\\r\\nData: \$currentDate\\r\\n\\r\
+		\\nWykryto nowa wersje skryptu: \$newVersion (aktualna wersja: \$currentVersion)\\r\\nAktualizacja zostanie wykonana.\"\
+		\n    \
+		\n    /tool e-mail send to=\$mail subject=\$emailSubject body=\$emailBody\
+		\n    :delay 15s\
+		\n    /import downloaded_script.rsc\
+		\n\
+		\n    /file set script_version.txt contents=\$newVersion\
+		\n} else={\
+		\n    :log info \"MTK -> Skrypty nie zostana pobrane, wersje sa takie same...\"\
+		\n    :set emailSubject (\"MTK Skrypty - status aktualizacji -> \" . \$routerName)\
+		\n    :set emailBody \"Status aktualizacji dla urzadzenia: \$routerName\\r\\nSerial Number: \$deviceSerial\\r\\nModel: \$deviceModel\\r\\nArchitecture: \$deviceArchitecture\\r\\nData: \$currentDate\\r\\n\\r\
+		\\nSkrypty sa aktualne\"\
+		\n    /tool e-mail send to=\$mail subject=\$emailSubject body=\$emailBody\
+		\n}\
+		\n\
+		\n:local securityEmailSubject (\"MTK Ustawienia bezpieczenstwa zostaly wdrozone -> \" . \$routerName)\
+		\n:local securityEmailBody \"Ustawienia bezpieczenstwa zostaly wdrozone: \$routerName\\r\\nSerial Number: \$deviceSerial\\r\\nModel: \$deviceModel\\r\\nArchitecture: \$deviceArchitecture\\r\\nData: \$currentDate\
+		\\r\\n\\r\\nZastosowane metody bezpieczenstwa:\\r\\n- WinBox port zmieniony na: \$winboxPort\\r\\n- Niepotrzebne serwisy zostaly wylaczone\\r\\n- Nowy uzytkownik zostal stworzony: \$newUsername\\r\\n- Defualtowy\
+		\_uzytkownik - admin - zostal wylacozny\"\
+		\n\
+		\n/tool e-mail send to=\$mail subject=\$securityEmailSubject body=\$securityEmailBody"
+}
+:delay 20s
+/file remove downloaded_script.rsc
